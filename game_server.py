@@ -196,6 +196,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8080)
     args = parser.parse_args()
-    with socketserver.ThreadingTCPServer(("", args.port), GameServerHandler) as httpd:
+    with socketserver.ThreadingTCPServer(("0.0.0.0", args.port), GameServerHandler) as httpd:
         print(f"Serving on port {args.port}")
         httpd.serve_forever()
