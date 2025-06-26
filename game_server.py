@@ -194,7 +194,7 @@ def check_win(board, row, col, player):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=5001)
+    parser.add_argument('--port', type=int, default=8080)
     args = parser.parse_args()
     with socketserver.ThreadingTCPServer(("", args.port), GameServerHandler) as httpd:
         print(f"Serving on port {args.port}")
