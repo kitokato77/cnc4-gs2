@@ -5,22 +5,46 @@ import threading
 import uuid
 import urllib.parse
 import redis
+import os
 
-redis_client = redis.Redis.from_url("redis://default:ASzKAAIjcDEzNTJlMDIzOTcxYTU0YTlkYTIzZDE3Y2YyNWVkNGMxY3AxMA@engaging-mayfly-11466.upstash.io:6379")
+# Redis configuration for Railway
+redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+try:
+    redis_client = redis.from_url(redis_url, decode_responses=True)
+    # Test connection
+    redis_client.ping()
+    print(f"Connected to Redis: {redis_url}")
+except Exception as e:
+    print(f"Redis connection failed: {e}")
+    redis_client = None
 
 class GameServerHandler(http.server.BaseHTTPRequestHandler):
     def _set_headers(self, status=200):
         self.send_response(status)
         self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
+    def do_OPTIONS(self):
+        self._set_headers()
+
     def do_POST(self):
+        if not redis_client:
+            self._set_headers(500)
+            self.wfile.write(json.dumps({'error': 'Redis not available'}).encode())
+            return
+
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
         try:
             data = json.loads(body)
         except Exception:
             data = {}
+            
+        print(f"POST {self.path}: {data}")
+        
         if self.path == '/create_room':
             player = data.get('player')
             if not player:
@@ -35,9 +59,10 @@ class GameServerHandler(http.server.BaseHTTPRequestHandler):
                 'turn': 0,
                 'winner': None
             }
-            redis_client.set(f'room:{room_id}', json.dumps(room))
+            redis_client.set(f'room:{room_id}', json.dumps(room), ex=3600)  # 1 hour expiry
             self._set_headers()
             self.wfile.write(json.dumps({'room_id': room_id}).encode())
+            
         elif self.path == '/join_room':
             player = data.get('player')
             room_id = data.get('room_id')
@@ -59,20 +84,25 @@ class GameServerHandler(http.server.BaseHTTPRequestHandler):
             save_room(room_id, room)
             self._set_headers()
             self.wfile.write(json.dumps({'room_id': room_id, 'success': True}).encode())
+            
         elif self.path == '/quick_join':
             player = data.get('player')
             found = False
-            for key in redis_client.scan_iter('room:*'):
-                room_id = key.split(':', 1)[1]
-                room = get_room(room_id)
-                if room and len(room['players']) == 1:
-                    room['players'].append(player)
-                    room['ready'][player] = False
-                    save_room(room_id, room)
-                    self._set_headers()
-                    self.wfile.write(json.dumps({'room_id': room_id}).encode())
-                    found = True
-                    break
+            try:
+                for key in redis_client.scan_iter('room:*'):
+                    room_id = key.split(':', 1)[1]
+                    room = get_room(room_id)
+                    if room and len(room['players']) == 1:
+                        room['players'].append(player)
+                        room['ready'][player] = False
+                        save_room(room_id, room)
+                        self._set_headers()
+                        self.wfile.write(json.dumps({'room_id': room_id}).encode())
+                        found = True
+                        break
+            except Exception as e:
+                print(f"Error in quick_join: {e}")
+                
             if not found:
                 room_id = str(uuid.uuid4())[:8]
                 room = {
@@ -82,9 +112,10 @@ class GameServerHandler(http.server.BaseHTTPRequestHandler):
                     'turn': 0,
                     'winner': None
                 }
-                redis_client.set(f'room:{room_id}', json.dumps(room))
+                redis_client.set(f'room:{room_id}', json.dumps(room), ex=3600)
                 self._set_headers()
                 self.wfile.write(json.dumps({'room_id': room_id}).encode())
+                
         elif self.path == '/set_ready':
             player = data.get('player')
             room_id = data.get('room_id')
@@ -98,6 +129,7 @@ class GameServerHandler(http.server.BaseHTTPRequestHandler):
             save_room(room_id, room)
             self._set_headers()
             self.wfile.write(json.dumps({'all_ready': all_ready}).encode())
+            
         elif self.path == '/make_move':
             player = data.get('player')
             room_id = data.get('room_id')
@@ -139,9 +171,17 @@ class GameServerHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': 'Not found'}).encode())
 
     def do_GET(self):
+        if not redis_client:
+            self._set_headers(500)
+            self.wfile.write(json.dumps({'error': 'Redis not available'}).encode())
+            return
+            
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
+        
+        print(f"GET {path}: {query}")
+        
         if path == '/lobby_status':
             room_id = query.get('room_id', [None])[0]
             room = get_room(room_id)
@@ -151,6 +191,7 @@ class GameServerHandler(http.server.BaseHTTPRequestHandler):
                 return
             self._set_headers()
             self.wfile.write(json.dumps({'players': room['players'], 'ready': room['ready']}).encode())
+            
         elif path == '/game_state':
             room_id = query.get('room_id', [None])[0]
             room = get_room(room_id)
@@ -165,15 +206,22 @@ class GameServerHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'error': 'Not found'}).encode())
 
 def get_room(room_id):
-    if not room_id:
+    if not room_id or not redis_client:
         return None
-    data = redis_client.get(f'room:{room_id}')
-    if data:
-        return json.loads(data)
+    try:
+        data = redis_client.get(f'room:{room_id}')
+        if data:
+            return json.loads(data)
+    except Exception as e:
+        print(f"Error getting room {room_id}: {e}")
     return None
 
 def save_room(room_id, room):
-    redis_client.set(f'room:{room_id}', json.dumps(room))
+    if redis_client:
+        try:
+            redis_client.set(f'room:{room_id}', json.dumps(room), ex=3600)
+        except Exception as e:
+            print(f"Error saving room {room_id}: {e}")
 
 def check_win(board, row, col, player):
     def count(dx, dy):
@@ -192,10 +240,7 @@ def check_win(board, row, col, player):
     return False
 
 if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=8080)
-    args = parser.parse_args()
-    with socketserver.ThreadingTCPServer(("0.0.0.0", args.port), GameServerHandler) as httpd:
-        print(f"Serving on port {args.port}")
+    port = int(os.getenv('PORT', 5001))
+    with socketserver.ThreadingTCPServer(("", port), GameServerHandler) as httpd:
+        print(f"Game server running on port {port}")
         httpd.serve_forever()
