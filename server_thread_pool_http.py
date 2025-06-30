@@ -1,6 +1,7 @@
 import socket
 import logging
 import argparse
+import os
 from concurrent.futures import ThreadPoolExecutor
 from game_server import HttpServerGame
 
@@ -61,7 +62,8 @@ def Server(port):
     the_clients = []
     my_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     my_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    my_socket.bind(('localhost', port))
+    # Bind to 0.0.0.0 untuk Railway (bukan localhost)
+    my_socket.bind(('0.0.0.0', port))
     my_socket.listen(5)
     logging.info(f"Game server listening on port {port}")
     with ThreadPoolExecutor(10) as executor:
@@ -74,10 +76,9 @@ def Server(port):
             logging.info(f"Active threads: {len(jumlah)}")
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=5001)
-    args = parser.parse_args()
-    Server(args.port)
+    # Gunakan PORT dari environment variable (Railway requirement)
+    port = int(os.getenv('PORT', 5001))
+    Server(port)
 
 if __name__ == "__main__":
     main()
