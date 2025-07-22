@@ -4,7 +4,6 @@ import redis
 import os
 from datetime import datetime
 
-# Gunakan REDIS_URL dari Railway environment variable
 redis_client = redis.Redis.from_url(os.getenv('REDIS_URL', 'redis://localhost:6379'), decode_responses=True)
 
 class HttpServerGame:
@@ -19,10 +18,6 @@ class HttpServerGame:
         resp.append("Connection: close\r\n")
         resp.append("Server: myserver/1.0\r\n")
         resp.append(f"Content-Length: {len(messagebody)}\r\n")
-        # Tambahkan CORS headers
-        resp.append("Access-Control-Allow-Origin: *\r\n")
-        resp.append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n")
-        resp.append("Access-Control-Allow-Headers: Content-Type\r\n")
         for kk in headers:
             resp.append(f"{kk}:{headers[kk]}\r\n")
         resp.append("\r\n")
@@ -39,8 +34,6 @@ class HttpServerGame:
         j = baris.split(" ")
         try:
             method = j[0].upper().strip()
-            if method == 'OPTIONS':
-                return self.response(200, 'OK', b'', {})
             if method == 'GET':
                 object_address = j[1].strip()
                 return self.http_get(object_address, all_headers)
@@ -74,9 +67,6 @@ class HttpServerGame:
             if not room:
                 return self.response(404, 'Not Found', json.dumps({'error': 'Room not found'}).encode(), {'Content-Type': 'application/json'})
             return self.response(200, 'OK', json.dumps({'players': room['players'], 'ready': room['ready']}).encode(), {'Content-Type': 'application/json'})
-        # Health check endpoint untuk load balancer
-        if object_address == '/health':
-            return self.response(200, 'OK', json.dumps({'status': 'healthy'}).encode(), {'Content-Type': 'application/json'})
         return self.response(404, 'Not Found', b'', {})
 
     def http_post(self, object_address, headers, body):
@@ -175,19 +165,13 @@ class HttpServerGame:
     def get_room(self, room_id):
         if not room_id:
             return None
-        try:
-            data = redis_client.get(f'room:{room_id}')
-            if data:
-                return json.loads(data)
-        except Exception as e:
-            print(f"Redis error: {e}")
+        data = redis_client.get(f'room:{room_id}')
+        if data:
+            return json.loads(data) # type: ignore
         return None
 
     def save_room(self, room_id, room):
-        try:
-            redis_client.set(f'room:{room_id}', json.dumps(room), ex=3600)  # Expire after 1 hour
-        except Exception as e:
-            print(f"Redis save error: {e}")
+        redis_client.set(f'room:{room_id}', json.dumps(room))
 
     def check_win(self, board, row, col, player):
         def count(dx, dy):
